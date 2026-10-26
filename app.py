@@ -3,11 +3,11 @@ from dataclasses import asdict
 import pandas as pd
 import streamlit as st
 
-from engine import (DENTAL_LIST_URL, EURLEX, MDCG_URL, ORDER, PRESET_REFS, PRESETS, ROUTES, RULE_INFO, SECTION,
-                    STATUS_HELP, Facts, classify, report_md, rule_status, what_if)
+from engine import (CATEGORY_ORDER, PRESET_CATEGORY, DENTAL_LIST_URL, EURLEX, MDCG_URL, ORDER, PRESET_REFS, PRESETS, ROUTES, RULE_INFO, SECTION,
+                    STATUS_HELP, UNCHECKED_RULES, Facts, classify, rationale_md, report_md, rule_status, what_if)
 from labels import BOOLS, LABELS
 
-st.set_page_config(page_title="MDR Classifier Lab", page_icon="🦷", layout="wide")
+st.set_page_config(page_title="MDR Classifier Lab", page_icon="🩺", layout="wide")
 COLORS = {"I": "#2e7d32", "IIa": "#f9a825", "IIb": "#ef6c00", "III": "#c62828"}
 
 
@@ -16,16 +16,30 @@ def load_preset():
         st.session_state[f"f_{k}"] = v
 
 
+SPECIALTIES = ["All"] + [c for c in CATEGORY_ORDER if c in set(PRESET_CATEGORY.values())]
+
+
+def preset_names():
+    return [n for n in PRESETS if st.session_state["category"] in ("All", PRESET_CATEGORY[n])]
+
+
+def on_category():
+    st.session_state["preset"] = preset_names()[0]
+    load_preset()
+
+
 if "preset" not in st.session_state:
+    st.session_state["category"] = "All"
     st.session_state["preset"] = next(iter(PRESETS))
     load_preset()
 
-st.title("🦷 Dental Device MDR Classifier Lab")
+st.title("🩺 Medical Device MDR Classifier Lab")
 st.caption("EU MDR 2017/745 Annex VIII, Rules 1-22, as a transparent and cited rule engine.")
 
 left, right = st.columns([1, 1.25], gap="large")
 with left:
-    st.selectbox("Start from a dental example", list(PRESETS), key="preset", on_change=load_preset)
+    st.selectbox("Specialty", SPECIALTIES, key="category", on_change=on_category)
+    st.selectbox("Start from an example", preset_names(), key="preset", on_change=load_preset)
     for name, (question, opts) in LABELS.items():
         st.selectbox(question, list(opts), format_func=opts.get, key=f"f_{name}")
     for group, items in BOOLS.items():
@@ -83,10 +97,10 @@ with right:
         name = st.session_state["preset"]
         ref = PRESET_REFS.get(name)
         icons = {"Named in guidance": "✅", "Reasoned": "🟡", "Needs judgement": "⚠️"}
-        st.caption("Each dental example is cross-checked against MDCG 2021-24 Rev.1 (April 2026). "
+        st.caption("Each example is cross-checked against MDCG 2021-24 Rev.1 (April 2026). "
                    "Notes are paraphrased; page numbers are as printed in the PDF.")
         if ref is None:
-            st.info("The blank canvas has no guidance cross-reference. Pick a dental example to see one.")
+            st.info("The blank canvas has no guidance cross-reference. Pick an example to see one.")
         else:
             if facts != PRESETS[name]:
                 st.warning("You have edited the inputs. This check refers to the original preset.")
@@ -104,6 +118,17 @@ with right:
         st.markdown(f"[MDCG 2021-24 Rev.1 (PDF)]({MDCG_URL}) · "
                     f"[Dental-device classification list, 2022 (secondary, industry-authored)]({DENTAL_LIST_URL})")
         st.markdown("**All examples**")
-        st.dataframe(pd.DataFrame([{"Example": n, "Engine": classify(PRESETS[n]).cls, "Guidance": r.guidance_class,
+        st.dataframe(pd.DataFrame([{"Specialty": PRESET_CATEGORY[n], "Example": n, "Engine": classify(PRESETS[n]).cls, "Guidance": r.guidance_class,
                                     "Status": f"{icons[r.status]} {r.status}", "Where": r.location}
                                    for n, r in PRESET_REFS.items()]), hide_index=True, width="stretch")
+
+        if any(h.rule in UNCHECKED_RULES for h in res.hits):
+            st.info("Rules 20-22: the guidance example tables could not be retrieved, so results involving these "
+                    "rules are not cross-checked. Compare them against MDCG 2021-24 Rev.1 manually.")
+
+    with tab5:
+        rat = rationale_md(st.session_state["preset"], facts, res)
+        st.download_button("Download classification rationale draft (.md)", rat,
+                           file_name="classification_rationale.md", key="rationale_download")
+        with st.expander("Preview the rationale draft"):
+            st.markdown(rat)
