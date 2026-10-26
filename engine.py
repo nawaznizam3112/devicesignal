@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
 
+from examples import GENERAL_EXAMPLES
+
 EURLEX = "https://eur-lex.europa.eu/eli/reg/2017/745/oj"
 ORDER = {"I": 0, "IIa": 1, "IIb": 2, "III": 3}
 CHOICES = {
@@ -583,7 +585,8 @@ PRESET_REFS = {
         "a medicinal product are excluded, so check PRF is not treated that way."),
     "Saliva substitute (substance-based)": PresetRef(REASONED, "IIa", "Annex VIII 7.8 (Rule 21)",
         "Rule 21 gives IIa for substances applied in the oral cavity and acting there. The Rule 21 example table "
-        "was not retrieved, so no named example is confirmed."),
+        "was not retrievable, so no named example is confirmed. A consultancy article (secondary source) lists "
+        "mucous-membrane moistening products among typical Rule 21 devices."),
     "Gauze compression pad on oral wound": PresetRef(NAMED, "I", "4.2 Rule 4, pp. 32-33",
         "Gauze dressings acting as a barrier or absorbing exudate, including on mucous membrane, are class I."),
     "Dental handpiece (powered)": PresetRef(NAMED, "IIa", "4.2 Rule 9, p. 42",
@@ -607,3 +610,89 @@ PRESET_REFS = {
         "Dental filling materials are a named IIa example (negligible exposure). Note 3 says to assess release "
         "during curing, grinding and polishing."),
 }
+
+
+# ---- Specialty catalogue: dental examples above plus the general library in examples.py ----
+CATEGORY_ORDER = ["Dental", "General & patient support", "Surgical & access", "Cardiovascular",
+                  "Orthopaedic & implants", "Ophthalmic", "Wound care", "Imaging & diagnostics",
+                  "Therapeutic & life support", "Blood & cell handling", "Software", "Women's health",
+                  "Reprocessing", "Tissue, nano & substances", "Respiratory", "Custom"]
+PRESET_CATEGORY = {n: "Dental" for n in PRESETS}
+PRESET_CATEGORY["Blank canvas"] = "Custom"
+for _cat, _name, _kw, _status, _cls, _loc, _note in GENERAL_EXAMPLES:
+    PRESETS[_name] = Facts(**_kw)
+    PRESET_REFS[_name] = PresetRef(_status, _cls, _loc, _note)
+    PRESET_CATEGORY[_name] = _cat
+
+
+# ---- Rationale draft for technical documentation (Annex II 1.1(f) asks for class and rule justification) ----
+UNCHECKED_RULES = ("20", "21", "22")
+OPEN_POINTS = {
+    NAMED: "Confirm the intended purpose and technology match the named example, and record which example you rely on.",
+    REASONED: "No named example exists. Record the closest example, why it is comparable, and why a higher or lower "
+              "rule does not apply.",
+    JUDGEMENT: "Record the decision criteria and the evidence for them. Expect a notified body to challenge a lower "
+               "class here.",
+}
+
+
+def describe_facts(f: Facts) -> list:
+    """Plain-language list of the inputs that matter, using the UI wording."""
+    from labels import BOOLS, LABELS
+    default, out = Facts(), []
+    for key, (question, opts) in LABELS.items():
+        value = getattr(f, key)
+        show = (value != getattr(default, key) or key == "invasiveness"
+                or (key == "duration" and f.invasiveness != "non_invasive")
+                or (key == "purpose_site" and f.substance_based))
+        if show:
+            out.append(f"{question}: {opts[value]}")
+    out += [text for items in BOOLS.values() for key, text in items.items() if getattr(f, key)]
+    return out
+
+
+def rationale_md(name: str, f: Facts, res: Result) -> str:
+    ref = PRESET_REFS.get(name) if PRESETS.get(name) == f else None
+    governing = ", ".join(f"Rule {r}" for r in sorted({h.rule for h in res.hits if h.cls == res.cls}, key=int))
+    L = [f"# Classification rationale (draft): {name}", "", f"**Proposed class: {res.label}**", "",
+         "## 1. Intended purpose", "",
+         "[Complete before use: state the intended purpose exactly as in the instructions for use. Class follows the "
+         "intended purpose, not accidental or off-label use (MDCG 2021-24 Rev.1, section 3.2).]", "",
+         "## 2. Characteristics relevant to classification", ""]
+    L += [f"- {d}" for d in describe_facts(f)]
+    L += ["", "## 3. Application of Annex VIII", "",
+          "All 22 rules of Annex VIII, Chapter III were considered. The characteristics above trigger:", "",
+          "| Rule | Class | Where | Reason |", "|---|---|---|---|"]
+    L += [f"| {h.rule} ({RULE_INFO[h.rule][0]}) | {h.cls} | {h.ref} | {h.why} |" for h in res.hits]
+    L += ["", "Where several rules apply, the strictest governs (Annex VIII, Chapter II, 3.5). "
+          f"The device is therefore class {res.label}, governed by {governing}.", "", "## 4. Supporting guidance", ""]
+    if ref:
+        L.append(f"MDCG 2021-24 Rev.1, section {ref.location} ({ref.status.lower()}): {ref.note}")
+    else:
+        L.append("No guidance cross-reference applies to these inputs. Compare the device with the examples and notes "
+                 "for the governing rule(s) in MDCG 2021-24 Rev.1 and record the closest example.")
+    L += ["", "## 5. Open points to document", ""]
+    L.append(f"- {OPEN_POINTS[ref.status]}" if ref else
+             "- Justify the class directly against the Annex VIII wording and the guidance notes for each triggered rule.")
+    extra = [
+        (f.active_therapeutic, "Hazard judgements follow the technology and intended application, not manufacturer "
+                               "mitigations (Rule 9 Note 1)."),
+        (f.chemical_change, "The chemical-change clause excludes change that happens only during placement "
+                            "(Rule 8 Note 5)."),
+        (f.software != "none", "Check software qualification and classification guidance (MDCG 2019-11); software "
+                               "driving a device takes that device's class (implementing rule 3.3)."),
+        (f.incorporates_medicinal or f.substance_based, "Confirm the product is a device and not a medicinal product, "
+                                                        "using the MDCG borderline guidance on devices and medicinal "
+                                                        "products."),
+        (f.tissue_origin != "none", "Confirm non-viability and the derivative definition (Rule 18 notes)."),
+        (any(h.rule in UNCHECKED_RULES for h in res.hits), "Example tables for Rules 20-22 were not cross-checked by "
+                                                           "this tool; compare them manually."),
+        (res.cls == "I", "Confirm whether the Is, Im or Ir sub-class applies (sterile, measuring, reusable surgical "
+                         "instrument)."),
+    ]
+    L += [f"- {text}" for cond, text in extra if cond]
+    L += ["- Implementing rules 3.2 (accessories and combinations) and 3.4 (several uses) are not modelled; classify "
+          "each device or use separately.", "",
+          "_Draft for regulatory review. This is a teaching tool, not a legal opinion; verify against Regulation (EU) "
+          f"2017/745 ({EURLEX}) and MDCG 2021-24 Rev.1._"]
+    return "\n".join(L)
